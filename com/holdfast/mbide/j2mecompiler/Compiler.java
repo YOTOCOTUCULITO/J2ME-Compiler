@@ -1,143 +1,304 @@
-package com.holdfast.mbide.j2mecompiler;
+import javax.microedition.lcdui.*;
+import javax.microedition.midlet.*;
+import java.util.Vector;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.text.SimpleDateFormat;
-import java.util.Calendar;
-import java.util.Date;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
+public class ZombieGameMidlet extends MIDlet {
+    private Display display;
+    private GameCanvas gameCanvas;
 
-/**
- *
- * @author HoldFast
- */
-public class Compiler {
-
-    long time1, time2;
-
-    void Compiler() {
-
+    public ZombieGameMidlet() {
+        gameCanvas = new GameCanvas();
+        display = Display.getDisplay(this);
     }
 
-    void compile(String apipath, String srcpath, String outpath) throws Exception {
-        File file = new File(outpath);
-        file.mkdir();
-        File[] listOfFiles = file.listFiles();
-        for (File fil : listOfFiles) {
-            if (fil.isFile()) {
-                fil.delete();
+    public void startApp() {
+        display.setCurrent(gameCanvas);
+        gameCanvas.start();
+    }
+
+    public void pauseApp() {}
+
+    public void destroyApp(boolean unconditional) {
+        gameCanvas.stop();
+    }
+}
+
+class GameCanvas extends Canvas implements Runnable {
+    private boolean running;
+    private int width, height;
+    private Player player;
+    private Vector enemies;
+    private Vector projectiles;
+    private int lives = 3;
+    private long lastUpdate;
+    private int enemySpawnInterval = 2000; // En milisegundos
+    private int difficulty = 2;
+    private int enemySpeed = 2;
+
+    public GameCanvas() {
+        width = getWidth();
+        height = getHeight();
+        player = new Player(width / 2, height - 50);
+        enemies = new Vector();
+        projectiles = new Vector();
+        lastUpdate = System.currentTimeMillis();
+    }
+
+    public void start() {
+        running = true;
+        Thread thread = new Thread(this);
+        thread.start();
+    }
+
+    public void stop() {
+        running = false;
+    }
+
+    public void run() {
+        long lastEnemySpawn = System.currentTimeMillis();
+        while (running) {
+            long now = System.currentTimeMillis();
+            if (now - lastUpdate >= 16) { // ~60 FPS
+                update();
+                repaint();
+                lastUpdate = now;
+            }
+            if (now - lastEnemySpawn >= enemySpawnInterval) {
+                spawnEnemy();
+                lastEnemySpawn = now;
+            }
+            try {
+                Thread.sleep(10); // Para limitar la velocidad de la ejecución
+            } catch (InterruptedException e) {
+                e.printStackTrace();
             }
         }
-        ProcessBuilder pb = new ProcessBuilder("javac",
-                "-cp", apipath, "-target",
-                "1.1", "-source", "1.3", "-nowarn", "-encoding", "UTF-8", srcpath + "*.java", "-d", outpath);
-        Process p = pb.start();
+    }
 
-        time1 = System.currentTimeMillis();
+    protected void paint(Graphics g) {
+        g.setColor(0, 0, 0);
+        g.fillRect(0, 0, width, height);
+        player.draw(g);
+        drawProjectiles(g);
+        drawEnemies(g);
+        drawLives(g);
+    }
 
-        StringBuilder console = new StringBuilder();
-        InputStream stream = p.getErrorStream();
-        try {
-            int read;
-            byte[] buf = new byte[1024 * 99];
-            while ((read = stream.read(buf)) > 0) {
-                console.append(new String(buf, 0, read));
-            }
-        } finally {
-            if (stream != null) {
-                stream.close();
+    protected void keyPressed(int keyCode) {
+        int gameAction = getGameAction(keyCode);
+        switch (gameAction) {
+            case LEFT:
+                player.moveLeft();
+                break;
+            case RIGHT:
+                player.moveRight();
+                break;
+            case UP:
+                player.moveUp();
+                break;
+            case DOWN:
+                player.moveDown();
+                break;
+            case FIRE:
+                player.shoot(projectiles);
+                break;
+        }
+    }
+
+    private void update() {
+        player.update();
+        updateProjectiles();
+        updateEnemies();
+        checkCollisions();
+    }
+
+    private void drawLives(Graphics g) {
+        g.setColor(255, 0, 0);
+        for (int i = 0; i < lives; i++) {
+            g.fillRect(10 + (i * 15), 10, 10, 10);
+        }
+    }
+
+    private void drawProjectiles(Graphics g) {
+        for (int i = 0; i < projectiles.size(); i++) {
+            Projectile p = (Projectile) projectiles.elementAt(i);
+            p.draw(g);
+        }
+    }
+
+    private void drawEnemies(Graphics g) {
+        for (int i = 0; i < enemies.size(); i++) {
+            Enemy e = (Enemy) enemies.elementAt(i);
+            e.draw(g);
+        }
+    }
+
+    private void updateProjectiles() {
+        for (int i = 0; i < projectiles.size(); i++) {
+            Projectile p = (Projectile) projectiles.elementAt(i);
+            p.update();
+            if (p.isOffScreen(width, height)) {
+                projectiles.removeElementAt(i);
+                i--;
             }
         }
+    }
 
-        p.waitFor();
-
-        final String result = console.toString().trim();
-        System.out.println("javac:");
-        System.out.println(result);
-
-        p.waitFor();
-
-        File folder = new File(outpath);
-        listOfFiles = folder.listFiles();
-        if (listOfFiles.length == 0) {
-            throw new Exception("Ошибка компиляции");
+    private void updateEnemies() {
+        for (int i = 0; i < enemies.size(); i++) {
+            Enemy e = (Enemy) enemies.elementAt(i);
+            e.update();
+            if (e.isOffScreen(height)) {
+                enemies.removeElementAt(i);
+                i--;
+            }
         }
+    }
 
-        File f = new File("prebuild" + File.separator + "temp.jar");
-        f.mkdirs();
-        f.delete();
+    private void spawnEnemy() {
+        int x = (int) (Math.random() * (width - 30));
+        enemies.addElement(new Enemy(x, 0, 30, 30, enemySpeed));
+    }
 
-        ZipOutputStream zip = new ZipOutputStream(new FileOutputStream(f));
-
-        zip.putNextEntry(new ZipEntry("META-INF/MANIFEST.MF"));
-        zip.write(("Manifest-Version: 1.0\n"
-                + "Ant-Version: Apache Ant 1.9.4\n"
-                + "Created-By: 1.8.0_25-b18 (Oracle Corporation)\n"
-                + "MIDlet-1: FW,,FW\n"
-                + "MIDlet-Vendor: Vendor\n"
-                + "MIDlet-Version: 1.0\n"
-                + "MIDlet-Name: MBRun\n"
-                + "MicroEdition-Configuration: CLDC-1.1\n"
-                + "MicroEdition-Profile: MIDP-2.0").getBytes("UTF-8"));
-        zip.closeEntry();
-
-        for (File fil : listOfFiles) {
-            if (fil.isFile()) {
-                System.out.println(fil.getName());
-                zip.putNextEntry(new ZipEntry(fil.getName()));
-                FileInputStream fis = new FileInputStream(fil);
-
-                byte[] buffer = new byte[4092];
-                int byteCount = 0;
-                while ((byteCount = fis.read(buffer)) != -1) {
-                    zip.write(buffer, 0, byteCount);
-                    System.out.print('.');
-                    System.out.flush();
+    private void checkCollisions() {
+        for (int i = 0; i < enemies.size(); i++) {
+            Enemy e = (Enemy) enemies.elementAt(i);
+            if (player.collidesWith(e)) {
+                enemies.removeElementAt(i);
+                i--;
+                lives--;
+                if (lives <= 0) {
+                    gameOver();
+                    return;
                 }
-                zip.closeEntry();
+            }
+
+            for (int j = 0; j < projectiles.size(); j++) {
+                Projectile p = (Projectile) projectiles.elementAt(j);
+                if (p.collidesWith(e)) {
+                    enemies.removeElementAt(i);
+                    projectiles.removeElementAt(j);
+                    i--;
+                    break;
+                }
             }
         }
-        zip.close();
-        previrify("prebuild" + File.separator + "temp.jar", "bombom.jar");
-
     }
 
-    void previrify(String injar, String outjar) throws Exception {
-        ProcessBuilder pb = new ProcessBuilder("java", "-jar", "proguard" + File.separator + "proguard.jar",
-                "-injars", injar, "-outjars", outjar,
-                "-libraryjars", "proguard" + File.separator + "cldcapi11.jar", "-libraryjars", "proguard" + File.separator + "midpapi20.jar", "-microedition",
-                "-keep", "public class * extends javax.microedition.midlet.MIDlet", "-dontoptimize");
-        System.out.println("\nproguard:");
-        Process p = pb.start();
-        StringBuilder console = new StringBuilder();
-        InputStream stream = p.getInputStream();
-        try {
-            int read;
-            byte[] buf = new byte[1024 * 99];
-            while ((read = stream.read(buf)) > 0) {
-                console.append(new String(buf, 0, read));
-            }
-        } finally {
-            if (stream != null) {
-                stream.close();
-            }
-        }
+    private void gameOver() {
+        running = false;
+        // Muestra un mensaje o haz cualquier otra cosa para indicar el fin del juego
+    }
+}
 
-        p.waitFor();
-        time2 = System.currentTimeMillis();
-        long difference = time2 - time1;
-        java.util.Date differneceDate = new Date(difference);
+class Player {
+    private int x, y;
+    private int width = 20;
+    private int height = 20;
+    private int speed = 5;
 
-        final String result = console.toString().trim();
-        System.out.println(result);
-        System.out.println("Сборка завершена за " + getTime(differneceDate));
-
+    public Player(int startX, int startY) {
+        x = startX;
+        y = startY;
     }
 
-    private String getTime(Date date) {
-        return (new SimpleDateFormat("mm:ss")).format(date);
+    public void moveLeft() {
+        x -= speed;
+        if (x < 0) x = 0;
     }
+
+    public void moveRight() {
+        x += speed;
+        if (x > 220) x = 220; // 240 - width
+    }
+
+    public void moveUp() {
+        y -= speed;
+        if (y < 0) y = 0;
+    }
+
+    public void moveDown() {
+        y += speed;
+        if (y > 300) y = 300; // 320 - height
+    }
+
+    public void shoot(Vector projectiles) {
+        projectiles.addElement(new Projectile(x + width / 2 - 2, y));
+    }
+
+    public void update() {
+        // Lógica de actualización del jugador
+    }
+
+    public void draw(Graphics g) {
+        g.setColor(255, 255, 255);
+        g.fillRect(x, y, width, height);
+    }
+
+    public boolean collidesWith(Enemy e) {
+        return x < e.getX() + e.getWidth() && x + width > e.getX() &&
+               y < e.getY() + e.getHeight() && y + height > e.getY();
+    }
+}
+
+class Projectile {
+    private int x, y;
+    private int width = 4;
+    private int height = 10;
+    private int speed = 7;
+
+    public Projectile(int startX, int startY) {
+        x = startX;
+        y = startY;
+    }
+
+    public void update() {
+        y -= speed;
+    }
+
+    public void draw(Graphics g) {
+        g.setColor(255, 0, 0);
+        g.fillRect(x, y, width, height);
+    }
+
+    public boolean isOffScreen(int screenWidth, int screenHeight) {
+        return y < 0;
+    }
+
+    public boolean collidesWith(Enemy e) {
+        return x < e.getX() + e.getWidth() && x + width > e.getX() &&
+               y < e.getY() + e.getHeight() && y + height > e.getY();
+    }
+}
+
+class Enemy {
+    private int x, y;
+    private int width, height;
+    private int speed;
+
+    public Enemy(int startX, int startY, int width, int height, int speed) {
+        x = startX;
+        y = startY;
+        this.width = width;
+        this.height = height;
+        this.speed = speed;
+    }
+
+    public void update() {
+        y += speed;
+    }
+
+    public void draw(Graphics g) {
+        g.setColor(0, 255, 0);
+        g.fillRect(x, y, width, height);
+    }
+
+    public boolean isOffScreen(int screenHeight) {
+        return y > screenHeight;
+    }
+
+    public int getX() { return x; }
+    public int getY() { return y; }
+    public int getWidth() { return width; }
+    public int getHeight() { return height; }
 }
